@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.tex": "latex",
+        "game.h": "c",
+        "in.h": "c"
+    }
+}
