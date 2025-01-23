@@ -94,6 +94,7 @@ public class ConnectionManager {
                 }
             } finally {
                 System.out.println("Listener thread stopped.");
+                Main.switchPanel("MenuPanel");
             }
         });
         listenerThread.setDaemon(true);

@@ -63,9 +63,17 @@ void* periodic_check(void* arg) {
     }
 }
 
+void* monitor_graceful_timeout(void* arg) {
+    (void)arg;
+    while (1) {
+        check_graceful_timeout();
+        sleep(1);
+    }
+}
+
 int main(int argc, char *argv[]) {
     // IP, PORT, PING CHECK
-    char ip[INET_ADDRSTRLEN] = { 0 };
+    char ip[INET_ADDRSTRLEN] = {0};
     int port = 0;
     int enable_check = 1;
 
@@ -98,12 +106,20 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Launch periodic check thread if enabled
     if (enable_check) {
         pthread_t checker_thread;
         pthread_create(&checker_thread, NULL, periodic_check, NULL);
         pthread_detach(checker_thread);
     }
-        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    // Launch graceful timeout check thread (always active)
+    pthread_t graceful_timeout_thread;
+    pthread_create(&graceful_timeout_thread, NULL, monitor_graceful_timeout, NULL);
+    pthread_detach(graceful_timeout_thread);
+
+    // Server initialization and main loop...
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -176,23 +192,35 @@ int main(int argc, char *argv[]) {
                     close(players[i].sockfd);
                     FD_CLR(players[i].sockfd, &all_fds);
 
-                    GameSession *session = find_session_by_username(players[i].username);
-                    if (session) {
-                        Player *opponent = (session->players[0] == &players[i]) ? session->players[1] : session->players[0];
-                        if (opponent && opponent->state == STATE_IDLE) {
-                            cleanup_session(session);
-                            continue;
-                        } else if (opponent->state == STATE_PLAYING) {
-                            if (send(opponent->sockfd, "KIVUPSOPPONENT_DISCONNECTED\n", 29, 0) == -1) {
-                                perror("Failed to notify opponent about disconnection");
-                            } else {
-                                printf("Notified opponent about player %s's disconnection.\n", players[i].username);
+                    // Handle player in STATE_WAITING
+                    if (players[i].state == STATE_WAITING || players[i].state == STATE_IDLE) {
+                        clear_player_data(&players[i]);
+                    // Handle player in STATE_PLAYING
+                    } else if (players[i].state == STATE_PLAYING) {
+                        GameSession *session = find_session_by_username(players[i].username);
+                        if (session) {
+                            Player *opponent = (session->players[0] == &players[i]) ? session->players[1] : session->players[0];
+
+                            if (opponent && opponent->state == STATE_PLAYING) {
+                                // Notify the opponent about the disconnection
+                                if (send(opponent->sockfd, "KIVUPSOPPONENT_DISCONNECTED\n", 29, 0) == -1) {
+                                    perror("Failed to notify opponent about disconnection");
+                                } else {
+                                    printf("Notified opponent %s about player %s's disconnection.\n", opponent->username, players[i].username);
+                                }
+
+                                // Mark the disconnected player and start timeout
+                                players[i].state = STATE_DISCONNECTED;
+                                opponent->opponentDisconnectTime = time(NULL);
+                                printf("Player %s marked as disconnected. Timeout started.\n", players[i].username);
+
+                            } else if (opponent && opponent->state == STATE_DISCONNECTED) {
+                                // If both players are disconnected, clean up immediately
+                                printf("Both players disconnected. Cleaning up session.\n");
+                                cleanup_session(session);
                             }
                         }
                     }
-
-                    clear_player_data(&players[i]);
-
                 } else {
                     players[i].bufferPtr += valread;
                     players[i].buffer[players[i].bufferPtr] = '\0'; // Null-terminate buffer

@@ -27,6 +27,7 @@ void deal_initial_hands(GameSession *session);
 void reshuffle_discard_to_draw(GameSession *session);
 GameSession* find_session_by_username(const char* username);
 void start_game(GameSession *session);
+int find_available_session_index();
 void broadcast_game_state(GameSession *session, int playerIndex, int broadcast);
 void cleanup_session(GameSession *session);
 void parse_card_info(const char *card, char *suit, char *value);

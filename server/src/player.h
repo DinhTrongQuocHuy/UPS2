@@ -5,6 +5,7 @@
 
 #define MAX_PLAYERS 10
 #define BUFFER_SIZE 512
+#define MAX_DISCONNECT_TIMEOUT 20
 
 typedef enum {
     STATE_IDLE,
@@ -24,14 +25,17 @@ typedef struct {
     char buffer[BUFFER_SIZE];
     int bufferPtr;
     char username[BUFFER_SIZE];
+    time_t opponentDisconnectTime;
 } Player;
 
 extern Player players[MAX_PLAYERS];
 
 void init_players();
 void clear_player_data(Player *player);
+void check_graceful_timeout();
 void disconnect_player(Player *player);
 void handle_player_message(Player *player);
+int handle_reconnection(Player *player, const char *username);
 void handle_enter_queue(Player *player);
 void handle_play_card(Player *player);
 void handle_suit_change(Player *player);

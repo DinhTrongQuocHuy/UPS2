@@ -95,7 +95,12 @@ void reshuffle_discard_to_draw(GameSession *session) {
 }
 
 GameSession* find_session_by_username(const char* username) {
-    for (int i = 0; i < session_count; i++) {
+    if (!username || strlen(username) == 0) {
+        printf("Error: Invalid username passed to find_session_by_username.\n");
+        return NULL;
+    }
+
+    for (int i = 0; i < MAX_SESSIONS; i++) {
         GameSession *session = &sessions[i];
 
         // Skip cleared sessions
@@ -109,7 +114,9 @@ GameSession* find_session_by_username(const char* username) {
             return session;
         }
     }
-    return NULL;  // Return NULL if no session is found with the given username
+
+    printf("Session not found for username: %s\n", username);
+    return NULL;
 }
 
 void start_game(GameSession *session) {
@@ -141,10 +148,75 @@ void start_game(GameSession *session) {
     session->currentTurn = rand() % 2;
 
     // Broadcast the initial game state to both players
-    broadcast_game_state(session, -1, 1); // Unified function with broadcast
+    broadcast_game_state(session, -1, 1);
+
+    printf("Game session started successfully.\n");
 }
 
-void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) {
+int find_available_session_index() {
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        if (sessions[i].players[0] == NULL && sessions[i].players[1] == NULL) {
+            return i; // Return the index of an available session
+        }
+    }
+    return -1; // No available session found
+}
+
+// void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) {
+//     if (!session) {
+//         printf("Error: Invalid session.\n");
+//         return;
+//     }
+
+//     char gameState[BUFFER_SIZE] = "KIVUPSgameSt";
+//     strcat(gameState, "0000");  // Placeholder for possible future message length
+
+//     char discardCard[BUFFER_SIZE];
+//     snprintf(discardCard, sizeof(discardCard), "%s_%s", session->activeSuit, session->activeValue);
+
+//     for (int i = 0; i < 2; i++) {
+//         if (!broadcast && i != playerIndex) continue; // Skip other players if not broadcasting
+
+//         Player *player = session->players[i];
+//         Player *opponent = session->players[(i + 1) % 2];
+
+//         if (!player || player->sockfd == -1) {
+//             if (!broadcast) {
+//                 printf("Error: Invalid socket for player %d.\n", i + 1);
+//             }
+//             continue;
+//         }
+
+//         // Prepare the player's hand information
+//         char handInfo[BUFFER_SIZE] = "";
+//         for (int j = 0; j < player->handSize; j++) {
+//             strncat(handInfo, player->hand[j], BUFFER_SIZE - strlen(handInfo) - 2);
+//             if (j < player->handSize - 1) strncat(handInfo, ",", 1);
+//         }
+
+//         // Opponent's card count
+//         int opponentCardCount = (opponent && opponent->sockfd != -1) ? opponent->handSize : 0;
+
+//         // Build the game state message
+//         snprintf(gameState + 14, BUFFER_SIZE - 14, "P%d:%s|D:%s|O:%d|T:%d|%s\n",
+//                  i + 1, handInfo, discardCard, opponentCardCount,
+//                  (session->currentTurn == i ? 1 : 0),
+//                  (session->skipPending ? "SKIP_PENDING" :
+//                   session->force_draw_count > 0 ? "FORCE_DRAW_PENDING" : ""));
+
+//         // Send the game state to the player
+//         if (send(player->sockfd, gameState, strlen(gameState), 0) == -1) {
+//             perror("Failed to send game state");
+//         } else {
+//             printf("Game state sent to player %s.\n", player->username);
+//         }
+
+//         // If sending to a specific player, break after sending
+//         if (!broadcast) break;
+//     }
+// }
+
+void broadcast_game_state(GameSession *session, int reconnectingPlayerIndex, int broadcast) {
     if (!session) {
         printf("Error: Invalid session.\n");
         return;
@@ -157,15 +229,13 @@ void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) 
     snprintf(discardCard, sizeof(discardCard), "%s_%s", session->activeSuit, session->activeValue);
 
     for (int i = 0; i < 2; i++) {
-        if (!broadcast && i != playerIndex) continue; // Skip other players if not broadcasting
+        if (!broadcast && i != reconnectingPlayerIndex) continue; // Skip non-reconnecting players if not broadcasting
 
         Player *player = session->players[i];
-        Player *opponent = session->players[(i + 1) % 2];
+        Player *opponent = session->players[1 - i];
 
         if (!player || player->sockfd == -1) {
-            if (!broadcast) {
-                printf("Error: Invalid socket for player %d.\n", i + 1);
-            }
+            printf("Error: Invalid socket for player %d.\n", i + 1);
             continue;
         }
 
@@ -199,24 +269,37 @@ void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) 
 }
 
 void cleanup_session(GameSession *session) {
-    if (!session) return; // Validate session
+    if (!session) return;
 
-    for (int i = 0; i < 2; i++) {
-        if (session->players[i]) { // Check if the player pointer is valid
-            session->players[i] = NULL; // Remove the player reference from the session
+    printf("Cleaning up session...\n");
+
+    if ((session->players[0] && session->players[0]->state == STATE_DISCONNECTED) && (session->players[1] && session->players[1]->state == STATE_DISCONNECTED)) {
+        for (int i = 0; i < 2; i++) {
+            if (session->players[i]) {
+                printf("Player %s fully cleared.\n", session->players[i]->username);
+                clear_player_data(session->players[i]);
+            }
         }
     }
+    
+    // Always remove player references from the session
+    for (int i = 0; i < 2; i++) {
+        session->players[i] = NULL;
+    }
 
-    // Clear session memory (excluding pointers to prevent double-free issues)
+    // Clear session data
     memset(session->activeSuit, 0, sizeof(session->activeSuit));
     memset(session->activeValue, 0, sizeof(session->activeValue));
     session->currentTurn = -1;
     session->skipPending = 0;
     session->force_draw_pending = 0;
     session->force_draw_count = 0;
+
     session->drawDeck.topCardIndex = -1;
     session->discardDeck.topCardIndex = -1;
-    session_count--;
+    memset(session->drawDeck.deck, 0, sizeof(session->drawDeck.deck));
+    memset(session->discardDeck.deck, 0, sizeof(session->discardDeck.deck));
+
     printf("Session cleanup complete.\n");
 }
 

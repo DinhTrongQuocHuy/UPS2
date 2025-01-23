@@ -60,6 +60,7 @@ public class QueuePanel extends BasePanel {
 
             if (gamePanel != null) {
                 gamePanel.setConnectionManager(ConnectionManager.getInstance());
+                gamePanel.initializeBoard();
                 gamePanel.parseGameState(message);
                 Main.switchPanel("GamePanel");
             } else {

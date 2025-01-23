@@ -10,7 +10,6 @@ import java.util.List;
 
 public class GamePanel extends BasePanel {
     // UI components
-    private CardLayout cardLayout;
     private JPanel mainPanel;
     private JLayeredPane opponentHandPanel;
     private JPanel playAreaPanel;
@@ -20,7 +19,6 @@ public class GamePanel extends BasePanel {
     private JLabel discardPileLabel;
     private JLabel selectedCardLabel;
     private JButton skipConfirmationButton;
-    private JDialog opponentDisconnectDialog;
     private JPanel suitSelectionPanel;
 
     // Game data
@@ -40,33 +38,47 @@ public class GamePanel extends BasePanel {
     // Initialization Methods
     // ===========================
 
-    private void initializeBoard() {
+    public void initializeBoard() {
+        // Set up the base layout and background
         setLayout(new BorderLayout());
         setBackground(new Color(50, 50, 50));
+    
+        // Reinitialize player and opponent hands
         playerHand = new ArrayList<>();
         opponentHand = new ArrayList<>();
-
+    
+        // Reset game data
+        topDiscardedCardName = "";
+        playerTurn = -1;
+        forceDraw = false;
+        gameOver = false;
+    
+        // Reset and initialize all relevant UI components
+        if (turnIndicator == null) {
+            turnIndicator = new JLabel("", SwingConstants.CENTER);
+            turnIndicator.setForeground(Color.WHITE);
+            turnIndicator.setFont(new Font("SansSerif", Font.BOLD, 30));
+        }
         initializeOpponentPanel();
         initializePlayArea();
         initializePlayerPanel();
     }
 
     private void initializeOpponentPanel() {
+        if (opponentHandPanel != null) {
+            opponentHandPanel.removeAll();
+        } else {
+            opponentHandPanel = new JLayeredPane();
+            opponentHandPanel.setPreferredSize(new Dimension(600, 200));
+        }
+    
         JPanel opponentPanelWrapper = new JPanel(new BorderLayout());
         opponentPanelWrapper.setOpaque(false);
     
         // Turn Indicator placed above opponent's hand
         JPanel turnIndicatorPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         turnIndicatorPanel.setOpaque(false);
-    
-        turnIndicator = new JLabel("Waiting for turn...", SwingConstants.CENTER);
-        turnIndicator.setFont(new Font("Arial", Font.BOLD, 18));
-        turnIndicator.setForeground(Color.WHITE);
         turnIndicatorPanel.add(turnIndicator);
-    
-        // Opponent hand
-        opponentHandPanel = new JLayeredPane();
-        opponentHandPanel.setPreferredSize(new Dimension(600, 200));
     
         // Add components to wrapper
         opponentPanelWrapper.add(turnIndicatorPanel, BorderLayout.NORTH);
@@ -74,51 +86,71 @@ public class GamePanel extends BasePanel {
     
         add(opponentPanelWrapper, BorderLayout.NORTH);
     }
-
+    
     private void initializePlayArea() {
-        playAreaPanel = new JPanel(null);
-        playAreaPanel.setOpaque(false);
-        playAreaPanel.setPreferredSize(new Dimension(600, 250));
+        if (playAreaPanel != null) {
+            playAreaPanel.removeAll();
+        } else {
+            playAreaPanel = new JPanel(null);
+            playAreaPanel.setOpaque(false);
+            playAreaPanel.setPreferredSize(new Dimension(600, 250));
+        }
     
         // Suit selection panel
-        suitSelectionPanel = new JPanel(new GridLayout(1, 4, 10, 10));
-        suitSelectionPanel.setBounds(200, 180, 200, 50); // Adjusted to place it below the piles
-        suitSelectionPanel.setOpaque(false);
-        suitSelectionPanel.setVisible(false); // Initially hidden
+        if (suitSelectionPanel != null) {
+            suitSelectionPanel.removeAll();
+        } else {
+            suitSelectionPanel = new JPanel(new GridLayout(1, 4, 10, 10));
+            suitSelectionPanel.setBounds(200, 180, 200, 50);
+            suitSelectionPanel.setOpaque(false);
+            suitSelectionPanel.setVisible(false);
+        }
         addSuitButtons(suitSelectionPanel);
         playAreaPanel.add(suitSelectionPanel);
     
         // Draw pile
-        drawPileLabel = createCardLabel("img/back.png", 100, 150);
-        drawPileLabel.setBounds(150, 20, 100, 150);
+        if (drawPileLabel == null) {
+            drawPileLabel = createCardLabel("img/back.png", 100, 150);
+            drawPileLabel.setBounds(150, 20, 100, 150);
+            addCardListener(drawPileLabel, "drawPile");
+        }
         playAreaPanel.add(drawPileLabel);
-        addCardListener(drawPileLabel, "drawPile");
     
         // Discard pile
-        discardPileLabel = new JLabel();
-        discardPileLabel.setBounds(350, 20, 100, 150);
+        if (discardPileLabel == null) {
+            discardPileLabel = new JLabel();
+            discardPileLabel.setBounds(350, 20, 100, 150);
+        }
         playAreaPanel.add(discardPileLabel);
     
         // Skip confirmation button
-        skipConfirmationButton = new JButton("Confirm Skip");
-        skipConfirmationButton.setBounds(550, 80, 150, 40);
-        skipConfirmationButton.setFont(new Font("Arial", Font.BOLD, 16));
+        if (skipConfirmationButton == null) {
+            skipConfirmationButton = new JButton("Confirm Skip");
+            skipConfirmationButton.setBounds(550, 80, 150, 40);
+            skipConfirmationButton.setFont(new Font("Arial", Font.BOLD, 16));
+            skipConfirmationButton.addActionListener(e -> handleSkipConfirmation());
+        }
         skipConfirmationButton.setVisible(false);
-        skipConfirmationButton.addActionListener(e -> handleSkipConfirmation());
         playAreaPanel.add(skipConfirmationButton);
     
         add(playAreaPanel, BorderLayout.CENTER);
-    }    
+    }
     
     private void initializePlayerPanel() {
+        if (playerHandPanel != null) {
+            playerHandPanel.removeAll();
+        } else {
+            playerHandPanel = new JLayeredPane();
+            playerHandPanel.setPreferredSize(new Dimension(600, 200));
+        }
+    
         JPanel playerPanelWrapper = new JPanel(new BorderLayout());
         playerPanelWrapper.setOpaque(false);
         playerPanelWrapper.setBorder(BorderFactory.createEmptyBorder(0, 0, 20, 0));
-        playerHandPanel = new JLayeredPane();
-        playerHandPanel.setPreferredSize(new Dimension(600, 200));
         playerPanelWrapper.add(playerHandPanel, BorderLayout.CENTER);
         add(playerPanelWrapper, BorderLayout.SOUTH);
     }
+    
 
     // ===========================
     // Event Handling
@@ -172,6 +204,8 @@ public class GamePanel extends BasePanel {
         // Delay the transition to the queue panel by 3 seconds
         int delay = 3000; // milliseconds
         javax.swing.Timer timer = new javax.swing.Timer(delay, e -> {
+            QueuePanel queuePanel = (QueuePanel) Main.getPanelByType(QueuePanel.class);
+            queuePanel.setConnectionManager(ConnectionManager.getInstance());
             ConnectionManager.getInstance().sendPlayerAction(null, "enter");
             Main.switchPanel("QueuePanel");
         });
@@ -181,7 +215,8 @@ public class GamePanel extends BasePanel {
     }      
     
     private void handleOpponentReconnected() {
-        turnIndicator.setText("The opponent has disconnected!");
+        turnIndicator.setText("The opponent has reconnected!");
+        
     }  
 
     private void handleSkipPending() {
@@ -198,7 +233,18 @@ public class GamePanel extends BasePanel {
 
     private void handleGameTerminationDisplay() {
         turnIndicator.setText("Game was terminated, going back to the queue...");
-        // TRANSITION BACK TO THE QUEUE
+    
+        // Delay the transition to the queue panel by 3 seconds
+        int delay = 3000; // milliseconds
+        javax.swing.Timer timer = new javax.swing.Timer(delay, e -> {
+            QueuePanel queuePanel = (QueuePanel) Main.getPanelByType(QueuePanel.class);
+            queuePanel.setConnectionManager(ConnectionManager.getInstance());
+            ConnectionManager.getInstance().sendPlayerAction(null, "enter");
+            Main.switchPanel("QueuePanel");
+        });
+    
+        timer.setRepeats(false); // Ensure the timer only runs once
+        timer.start();
     }
 
     private void handleSuitChange(String message) {
@@ -578,6 +624,5 @@ public class GamePanel extends BasePanel {
 
 /*
  * TODO:
- * 1) CURRENTLY THE PLAYER IS UNABLE TO SEND PLAY MESSAGE TO SERVER
- *      THE ISSUE SEEMS TO BE THE PLAYER STATE
+ * 1) Currently when a player wins the game and gets requeued, the updateHand is not working properly
  */
