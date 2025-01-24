@@ -227,8 +227,10 @@ public class GamePanel extends BasePanel {
     }
     
     private void handleOpponentDisconnectDisplay() {
-        turnIndicator.setText("The opponent has disconnected!");
-        // DISABLE PLAYER INTERACTION WITH THE BOARD
+        QueuePanel queuePanel = (QueuePanel) Main.getPanelByType(QueuePanel.class);
+        queuePanel.setStatusText("Opponent has disconnected");
+        queuePanel.setConnectionManager(ConnectionManager.getInstance());
+        Main.switchPanel("QueuePanel");
     }
 
     private void handleGameTerminationDisplay() {
