@@ -17,22 +17,24 @@ void init_players() {
 }
 
 void clear_player_data(Player *player) {
+    if (!player) return;
+
+    // Close the socket if it's still open
+    if (player->sockfd != -1) {
+        close(player->sockfd);
+        FD_CLR(player->sockfd, &all_fds);
+    }
+
     // Reset all fields
     player->sockfd = -1;
     player->state = STATE_IDLE;
     player->handSize = 0;
-
-    for (int i = 0; i < 32; i++) {
-        memset(player->hand[i], 0, BUFFER_SIZE);
-    }
-
+    memset(player->hand, 0, sizeof(player->hand));
     player->missedHeartbeats = 0;
     player->opponentDisconnectTime = 0;
-
     memset(player->buffer, 0, BUFFER_SIZE);
     player->bufferPtr = 0;
     player->pendingHeartbeat = 0;
-
     memset(player->username, 0, BUFFER_SIZE);
 }
 
@@ -79,86 +81,64 @@ void check_graceful_timeout() {
 }
 
 void disconnect_player(Player *player) {
-    if (!player || player->sockfd == -1) {
-        printf("Attempted to disconnect an invalid player.\n");
-        return;
-    }
+    if (!player || player->sockfd == -1) return;
 
-    // Notify the opponent and handle session cleanup if necessary
+    printf("Disconnecting player %s.\n", player->username);
+
     GameSession *session = find_session_by_username(player->username);
     if (session) {
         Player *opponent = (session->players[0] == player) ? session->players[1] : session->players[0];
-        
-        if (opponent) {
-            if (opponent->sockfd != -1) {
-                // Opponent is still connected; notify them
-                if (send(opponent->sockfd, "KIVUPSOPPONENT_DISCONNECTED\n", 29, MSG_NOSIGNAL) == -1) {
-                    perror("Failed to notify opponent about disconnection");
-                } else {
-                    printf("Notified opponent %s about player %s's disconnection.\n", 
-                           opponent->username, player->username);
-                }
-            } else {
-                // Opponent is already disconnected; clear the session
-                printf("Opponent %s is already disconnected. Clearing session.\n", opponent->username);
-                cleanup_session(session);
-            }
-        } else {
-            // No opponent in the session; clear the session
-            printf("No opponent found in session. Clearing session.\n");
-            cleanup_session(session);
+        if (opponent && opponent->sockfd != -1) {
+            send(opponent->sockfd, "KIVUPSOPPONENT_DISCONNECTED\n", 29, 0);
         }
     }
 
-    // Disconnect the player
     close(player->sockfd);
     FD_CLR(player->sockfd, &all_fds);
+    player->sockfd = -1;
     player->state = STATE_DISCONNECTED;
 
-    printf("Player %s disconnected and cleared.\n", player->username);
+    printf("Player %s marked as disconnected.\n", player->username);
 }
 
 void handle_player_message(Player *player) {
+    if (!player || player->sockfd == -1) return;
     char *buffer = player->buffer;
     int buffer_size = player->bufferPtr;
 
     char *message_start = buffer;
     char *newline;
-
     while ((newline = memchr(message_start, '\n', buffer_size - (message_start - buffer))) != NULL) {
-        *newline = '\0';  // Safely null-terminate
+        *newline = '\0';  // Null-terminate the message
 
-        // Validate message prefix
+        // Validate the message prefix
         if (strncmp(message_start, "KIVUPS", 6) != 0) {
-            printf("Invalid packet. Disconnecting player.\n");
+            printf("Invalid packet from player %s. Disconnecting.\n", player->username);
             disconnect_player(player);
             return;
         }
 
-        // Extract opcode and process it
+        // Extract and process the opcode
         char opcode[8];
         strncpy(opcode, message_start + 6, 6);
         opcode[6] = '\0';
-        printf("%s\n", player->buffer);
         if (strcmp(opcode, "enterQ") == 0) {
             if (player->state == STATE_IDLE || player->state == STATE_DISCONNECTED) {
                 handle_enter_queue(player);
             } else {
                 disconnect_player(player);
             }
+        } else if (strcmp(opcode, "reConn") == 0) {
+            handle_reconnection(player);
         } else if (strcmp(opcode, "heartB") == 0) {
             player->pendingHeartbeat = 0;
         } else if (player->state == STATE_PLAYING) {
             GameSession *session = find_session_by_username(player->username);
-            if (!session) {
+            if (!session || session->players[session->currentTurn] != player) {
+                printf("Player %s attempted an action out of turn.\n", player->username);
                 disconnect_player(player);
                 return;
             }
-            if (session->players[session->currentTurn] != player) {
-                disconnect_player(player);
-                return;
-            }
-
             if (strcmp(opcode, "playCa") == 0) {
                 handle_play_card(player);
             } else if (strcmp(opcode, "suitCh") == 0) {
@@ -173,142 +153,90 @@ void handle_player_message(Player *player) {
                 disconnect_player(player);
             }
         } else {
-            printf("Unhandled opcode: %s. Disconnecting player.\n", opcode);
+            printf("Unhandled opcode: %s. Disconnecting player %s.\n", opcode, player->username);
             disconnect_player(player);
         }
 
-        message_start = newline + 1;
+        message_start = newline + 1; // Move to the next message
     }
 
-    // Shift incomplete message to the start of the buffer
+    // Shift remaining incomplete messages to the buffer's start
     int remaining = buffer_size - (message_start - buffer);
     if (remaining > 0) {
         memmove(buffer, message_start, remaining);
     }
 
-    player->bufferPtr = remaining;  // Update buffer pointer
+    player->bufferPtr = remaining;  // Update the buffer pointer
 }
 
-// int handle_reconnection(Player *player, const char *username) {
-//     for (int i = 0; i < session_count; i++) {
-//         GameSession *session = &sessions[i];
+int handle_reconnection(Player *player) {
+    const char *username = player->username;
 
-//         // Check both players in the session
-//         for (int j = 0; j < 2; j++) {
-//             Player *reconnectingPlayer = session->players[j];
-
-//             if (reconnectingPlayer && reconnectingPlayer->state == STATE_DISCONNECTED &&
-//                 strcmp(reconnectingPlayer->username, username) == 0) {
-
-//                 printf("Reconnecting player %s to their session.\n", username);
-
-//                 // Rebind the socket and reset player state
-//                 reconnectingPlayer->sockfd = player->sockfd;
-//                 reconnectingPlayer->state = STATE_PLAYING;
-//                 reconnectingPlayer->opponentDisconnectTime = 0; // Clear disconnect timeout
-
-//                 // Notify the opponent about the reconnection
-//                 Player *opponent = session->players[1 - j];
-//                 if (opponent && opponent->sockfd != -1) {
-//                     if (send(opponent->sockfd, "KIVUPSPLAYER_RECONNECTED\n", 27, 0) == -1) {
-//                         perror("Failed to notify opponent about reconnection");
-//                     } else {
-//                         printf("Notified opponent %s about player %s's reconnection.\n",
-//                                opponent->username, username);
-//                     }
-//                 }
-
-//                 // Send the game state to the reconnecting player
-//                 send_game_state_to_player(session, j, (1 - j));
-
-//                 printf("Reconnection for player %s successful.\n", username);
-//                 return 1; // Reconnection successful
-//             }
-//         }
-//     }
-
-//     printf("No active session found for player %s.\n", username);
-//     return 0; // No session found for reconnection
-// }
-
-int handle_reconnection(Player *player, const char *username) {
     for (int i = 0; i < session_count; i++) {
         GameSession *session = &sessions[i];
-        
-        // Check both players in the session
+
         for (int j = 0; j < 2; j++) {
-            Player *reconnectingPlayer = session->players[j];
+            Player *disconnectedPlayer = session->players[j];
 
-            // Print the username of the iterated player for debugging
-            if (reconnectingPlayer) {
-                printf("Checking player %s in session %d, index %d.\n", 
-                       reconnectingPlayer->username, i, j);
-            } else {
-                printf("Player slot %d in session %d is empty.\n", j, i);
-            }
-
-            // Check if the player matches the username and is disconnected
-            if (reconnectingPlayer && reconnectingPlayer->state == STATE_DISCONNECTED &&
-                strcmp(reconnectingPlayer->username, username) == 0) {
+            if (disconnectedPlayer && disconnectedPlayer->state == STATE_DISCONNECTED &&
+                strcmp(disconnectedPlayer->username, username) == 0) {
 
                 printf("Reconnecting player %s to their session.\n", username);
 
-                // Rebind the socket and reset player state
-                reconnectingPlayer->sockfd = player->sockfd;
-                reconnectingPlayer->state = STATE_PLAYING;
-                reconnectingPlayer->opponentDisconnectTime = 0; // Clear disconnect timeout
+                int temp_sockfd = player->sockfd;
+                disconnectedPlayer->sockfd = temp_sockfd;
+                // Update the existing player instance
+                disconnectedPlayer->sockfd = player->sockfd;
+                disconnectedPlayer->state = STATE_PLAYING;
+                disconnectedPlayer->missedHeartbeats = 0;
+                disconnectedPlayer->opponentDisconnectTime = 0;
+
+                player->sockfd = -1;
+                clear_player_data(player);
 
                 // Notify the opponent about the reconnection
                 Player *opponent = session->players[1 - j];
                 if (opponent && opponent->sockfd != -1) {
-                    if (send(opponent->sockfd, "KIVUPSPLAYER_RECONNECTED\n", 27, 0) == -1) {
-                        perror("Failed to notify opponent about reconnection");
-                    } else {
-                        printf("Notified opponent %s about player %s's reconnection.\n",
-                               opponent->username, username);
-                    }
+                    opponent->opponentDisconnectTime = 0;
                 }
 
                 // Send the game state to the reconnecting player
-                broadcast_game_state(session, j, 0);
+                broadcast_game_state(session, -1, 1);
 
-                printf("Reconnection for player %s successful.\n", username);
-                return 1; // Reconnection successful
-            }
+                printf("Reconnection successful for player %s.\n", username);
+                return 1;  // Reconnection successful
+                }
         }
     }
 
-    printf("No active session found for player %s.\n", username);
-    return 0; // No session found for reconnection
+    printf("No session found for player %s.\n", username);
+    return 0;  // No session found
 }
 
 void handle_enter_queue(Player *player) {
     const char *ptr = player->buffer + 12;   // Skip "KIVUPSenterQ"
-    int username_len = atoi(ptr);            // Extract the length of the username
+    int username_len = atoi(ptr);
     ptr += 4;
 
-    char username[BUFFER_SIZE] = {0};  // Safe initialization
-    if (username_len >= BUFFER_SIZE) username_len = BUFFER_SIZE - 1;
+    char username[BUFFER_SIZE] = {0};
     strncpy(username, ptr, username_len);
-    username[username_len] = '\0';  // Explicitly null-terminate
+    username[username_len] = '\0';
 
     if (player->username[0] == '\0') {
-        strncpy(player->username, username, sizeof(player->username) - 1);
-        printf("Username set for player: %s\n", player->username);
+        strncpy(player->username, username, BUFFER_SIZE - 1);
     }
 
     printf("Player %s attempting to enter the queue...\n", player->username);
 
-    // Check if the player is reconnecting to a game
-    if (handle_reconnection(player, username)) {
-        return; // Reconnection handled, exit function
+    // Attempt reconnection first
+    if (handle_reconnection(player)) {
+        return;  // Reconnection successful
     }
 
-    // Mark the player as waiting
+    // If no reconnection, add the player to the queue
     player->state = STATE_WAITING;
     printf("Player %s added to the queue.\n", player->username);
 
-    // Check if there is another player waiting
     Player *opponent = NULL;
     for (int i = 0; i < MAX_PLAYERS; i++) {
         if (&players[i] != player && players[i].state == STATE_WAITING) {
@@ -317,27 +245,19 @@ void handle_enter_queue(Player *player) {
         }
     }
 
-    // Start a game if two players are in the queue
     if (opponent) {
-        printf("Two players found in the queue. Starting new game session...\n");
-
-        // Reserve a session index
         int session_index = find_available_session_index();
         if (session_index == -1) {
-            printf("No available session slots! Cannot start a new game.\n");
+            printf("No available session slots.\n");
             return;
         }
 
         GameSession *session = &sessions[session_index];
-
-        // Assign players to the session
         session->players[0] = player;
         session->players[1] = opponent;
-
-        for (int i = 0; i < 2; i++) {
-            session->players[i]->state = STATE_PLAYING;
-        }
-
+        player->state = STATE_PLAYING;
+        opponent->state = STATE_PLAYING;
+        session_count++;
         start_game(session);
     } else {
         printf("No opponent found for player %s. Waiting for another player.\n", player->username);

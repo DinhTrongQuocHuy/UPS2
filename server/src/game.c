@@ -162,61 +162,7 @@ int find_available_session_index() {
     return -1; // No available session found
 }
 
-// void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) {
-//     if (!session) {
-//         printf("Error: Invalid session.\n");
-//         return;
-//     }
-
-//     char gameState[BUFFER_SIZE] = "KIVUPSgameSt";
-//     strcat(gameState, "0000");  // Placeholder for possible future message length
-
-//     char discardCard[BUFFER_SIZE];
-//     snprintf(discardCard, sizeof(discardCard), "%s_%s", session->activeSuit, session->activeValue);
-
-//     for (int i = 0; i < 2; i++) {
-//         if (!broadcast && i != playerIndex) continue; // Skip other players if not broadcasting
-
-//         Player *player = session->players[i];
-//         Player *opponent = session->players[(i + 1) % 2];
-
-//         if (!player || player->sockfd == -1) {
-//             if (!broadcast) {
-//                 printf("Error: Invalid socket for player %d.\n", i + 1);
-//             }
-//             continue;
-//         }
-
-//         // Prepare the player's hand information
-//         char handInfo[BUFFER_SIZE] = "";
-//         for (int j = 0; j < player->handSize; j++) {
-//             strncat(handInfo, player->hand[j], BUFFER_SIZE - strlen(handInfo) - 2);
-//             if (j < player->handSize - 1) strncat(handInfo, ",", 1);
-//         }
-
-//         // Opponent's card count
-//         int opponentCardCount = (opponent && opponent->sockfd != -1) ? opponent->handSize : 0;
-
-//         // Build the game state message
-//         snprintf(gameState + 14, BUFFER_SIZE - 14, "P%d:%s|D:%s|O:%d|T:%d|%s\n",
-//                  i + 1, handInfo, discardCard, opponentCardCount,
-//                  (session->currentTurn == i ? 1 : 0),
-//                  (session->skipPending ? "SKIP_PENDING" :
-//                   session->force_draw_count > 0 ? "FORCE_DRAW_PENDING" : ""));
-
-//         // Send the game state to the player
-//         if (send(player->sockfd, gameState, strlen(gameState), 0) == -1) {
-//             perror("Failed to send game state");
-//         } else {
-//             printf("Game state sent to player %s.\n", player->username);
-//         }
-
-//         // If sending to a specific player, break after sending
-//         if (!broadcast) break;
-//     }
-// }
-
-void broadcast_game_state(GameSession *session, int reconnectingPlayerIndex, int broadcast) {
+void broadcast_game_state(GameSession *session, int playerIndex, int broadcast) {
     if (!session) {
         printf("Error: Invalid session.\n");
         return;
@@ -225,17 +171,19 @@ void broadcast_game_state(GameSession *session, int reconnectingPlayerIndex, int
     char gameState[BUFFER_SIZE] = "KIVUPSgameSt";
     strcat(gameState, "0000");  // Placeholder for possible future message length
 
-    char discardCard[BUFFER_SIZE];
+    char discardCard[BUFFER_SIZE] = { 0 };
     snprintf(discardCard, sizeof(discardCard), "%s_%s", session->activeSuit, session->activeValue);
 
     for (int i = 0; i < 2; i++) {
-        if (!broadcast && i != reconnectingPlayerIndex) continue; // Skip non-reconnecting players if not broadcasting
+        if (!broadcast && i != playerIndex) continue; // Skip other players if not broadcasting
 
         Player *player = session->players[i];
-        Player *opponent = session->players[1 - i];
+        Player *opponent = session->players[(i + 1) % 2];
 
         if (!player || player->sockfd == -1) {
-            printf("Error: Invalid socket for player %d.\n", i + 1);
+            if (!broadcast) {
+                printf("Error: Invalid socket for player %d.\n", i + 1);
+            }
             continue;
         }
 
@@ -266,6 +214,41 @@ void broadcast_game_state(GameSession *session, int reconnectingPlayerIndex, int
         // If sending to a specific player, break after sending
         if (!broadcast) break;
     }
+}
+
+void print_session_details(GameSession *session) {
+    if (!session) {
+        printf("Session is NULL.\n");
+        return;
+    }
+
+    printf("\n=== SESSION DETAILS ===\n");
+    printf("Current Turn: Player %d\n", session->currentTurn + 1);
+    printf("Active Suit: %s\n", session->activeSuit);
+    printf("Active Value: %s\n", session->activeValue);
+    printf("Skip Pending: %d\n", session->skipPending);
+    printf("Force Draw Pending: %d, Force Draw Count: %d\n", session->force_draw_pending, session->force_draw_count);
+
+    for (int i = 0; i < 2; i++) {
+        Player *player = session->players[i];
+        if (player) {
+            printf("\nPlayer %d:\n", i + 1);
+            printf("  Username: %s\n", player->username[0] ? player->username : "(empty)");
+            printf("  State: %d\n", player->state);
+            printf("  Socket FD: %d\n", player->sockfd);
+            printf("  Hand Size: %d\n", player->handSize);
+            printf("  Hand: ");
+            for (int j = 0; j < player->handSize; j++) {
+                printf("%s%s", player->hand[j], (j < player->handSize - 1) ? ", " : "\n");
+            }
+            printf("  Missed Heartbeats: %d\n", player->missedHeartbeats);
+            printf("  Pending Heartbeat: %d\n", player->pendingHeartbeat);
+        } else {
+            printf("\nPlayer %d: NULL\n", i + 1);
+        }
+    }
+
+    printf("=== END OF SESSION DETAILS ===\n");
 }
 
 void cleanup_session(GameSession *session) {
@@ -384,7 +367,17 @@ void check_player_activity() {
             // Mark as disconnected on the first missed heartbeat
             if (player->missedHeartbeats == 1) {
                 printf("NO HEARTBEAT RESPONSE\n");
+
+                // Mark the player as disconnected
                 player->state = STATE_DISCONNECTED;
+
+                // Properly close the socket and clear it from fd_set
+                if (player->sockfd != -1) {
+                    close(player->sockfd);  // Close the socket
+                    FD_CLR(player->sockfd, &all_fds);  // Remove from fd_set
+                    printf("Closed socket fd %d for player %s.\n", player->sockfd, player->username);
+                    player->sockfd = -1;  // Mark socket as invalid
+                }
 
                 // Notify the opponent
                 GameSession *session = find_session_by_username(player->username);

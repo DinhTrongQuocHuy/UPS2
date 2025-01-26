@@ -5,7 +5,7 @@
 
 #define MAX_PLAYERS 10
 #define BUFFER_SIZE 512
-#define MAX_DISCONNECT_TIMEOUT 20
+#define MAX_DISCONNECT_TIMEOUT 30
 
 typedef enum {
     STATE_IDLE,
@@ -35,7 +35,7 @@ void clear_player_data(Player *player);
 void check_graceful_timeout();
 void disconnect_player(Player *player);
 void handle_player_message(Player *player);
-int handle_reconnection(Player *player, const char *username);
+int handle_reconnection(Player *player);
 void handle_enter_queue(Player *player);
 void handle_play_card(Player *player);
 void handle_suit_change(Player *player);

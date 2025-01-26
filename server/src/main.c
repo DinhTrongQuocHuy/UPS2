@@ -165,7 +165,18 @@ int main(int argc, char *argv[]) {
         select(max_fd + 1, &read_fds, NULL, NULL, NULL);
 
         if (FD_ISSET(server_fd, &read_fds)) {
-            new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+            while ((new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen)) == -1) {
+                if (errno == EINTR) {
+                    // Interrupted by signal, retry accept
+                    continue;
+                }
+                perror("accept");
+                break; // Exit loop on other errors
+            }
+            if (new_socket == -1) {
+                continue;  // Skip further processing for this iteration
+            }
+
             printf("New connection, socket fd: %d\n", new_socket);
 
             FD_SET(new_socket, &all_fds);
@@ -173,7 +184,7 @@ int main(int argc, char *argv[]) {
 
             // Assign the new socket to an available player slot
             for (int i = 0; i < MAX_PLAYERS; i++) {
-                if (players[i].sockfd == -1 && players[i].state != STATE_DISCONNECTED) {
+                if (players[i].sockfd == -1 && (players[i].state != STATE_DISCONNECTED)) {
                     players[i].sockfd = new_socket;
                     printf("Assigned new player to slot %d (fd: %d)\n", i, new_socket);
                     break;
@@ -191,6 +202,9 @@ int main(int argc, char *argv[]) {
                     printf("Player %s disconnected.\n", players[i].username);
                     close(players[i].sockfd);
                     FD_CLR(players[i].sockfd, &all_fds);
+
+                    memset(players[i].buffer, 0, BUFFER_SIZE);
+                    players[i].bufferPtr = 0;
 
                     // Handle player in STATE_WAITING
                     if (players[i].state == STATE_WAITING || players[i].state == STATE_IDLE) {
@@ -211,12 +225,14 @@ int main(int argc, char *argv[]) {
 
                                 // Mark the disconnected player and start timeout
                                 players[i].state = STATE_DISCONNECTED;
-                                opponent->opponentDisconnectTime = time(NULL);
-                                printf("Player %s marked as disconnected. Timeout started.\n", players[i].username);
+                                players[i].sockfd = -1;
+                                //opponent->opponentDisconnectTime = time(NULL);
+                                //printf("Player %s marked as disconnected. Timeout started.\n", players[i].username);
 
                             } else if (opponent && opponent->state == STATE_DISCONNECTED) {
                                 // If both players are disconnected, clean up immediately
                                 printf("Both players disconnected. Cleaning up session.\n");
+
                                 cleanup_session(session);
                             }
                         }

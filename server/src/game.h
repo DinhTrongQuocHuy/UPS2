@@ -29,6 +29,7 @@ GameSession* find_session_by_username(const char* username);
 void start_game(GameSession *session);
 int find_available_session_index();
 void broadcast_game_state(GameSession *session, int playerIndex, int broadcast);
+void print_session_details(GameSession *session);
 void cleanup_session(GameSession *session);
 void parse_card_info(const char *card, char *suit, char *value);
 int validate_move(const char *played_suit, const char *played_value, const char *active_suit, const char *active_value);
