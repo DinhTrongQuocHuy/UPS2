@@ -414,13 +414,13 @@ void check_player_activity() {
         }
 
         // Send a new heartbeat if none is pending
-        if (!player->pendingHeartbeat) {
+        if (!player->pendingHeartbeat && player->sockfd != -1) {
             if (send(player->sockfd, "KIVUPSHEARTBEAT\n", 16, MSG_NOSIGNAL) == -1) {
                 perror("Failed to send heartbeat");
                 player->missedHeartbeats++;
             } else {
                 player->pendingHeartbeat = 1; // Await response
-                printf("Sent heartbeat to player %s.\n", player->username);
+                //printf("Sent heartbeat to player %s.\n", player->username);
             }
         }
     }

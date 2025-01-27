@@ -3,6 +3,9 @@ import java.net.Socket;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
+
 public class ConnectionManager {
     private static ConnectionManager instance;
     private Socket socket;
@@ -58,16 +61,9 @@ public class ConnectionManager {
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             writer = new PrintWriter(socket.getOutputStream(), true);
             System.out.println("Connected to the server at " + serverIp + ":" + serverPort);
-            if (!connected) sendReconnectMessage();
             startListening();
-            // startConnectionMonitor();
+            startConnectionMonitor();
         }
-    }
-
-    private void sendReconnectMessage() {
-        String reconnectMessage = String.format("KIVUPSreconnect%04d%s", username.length(), username);
-        sendMessage(reconnectMessage);
-        System.out.println("Sent reconnect message: " + reconnectMessage);
     }
 
     private void startListening() {
@@ -92,9 +88,6 @@ public class ConnectionManager {
                     setConnected(false);
                     handleDisconnection();
                 }
-            } finally {
-                System.out.println("Listener thread stopped.");
-                Main.switchPanel("MenuPanel");
             }
         });
         listenerThread.setDaemon(true);
@@ -106,15 +99,29 @@ public class ConnectionManager {
             @Override
             public void run() {
                 long currentTime = System.currentTimeMillis();
-                if (isConnected() && currentTime - lastMessageReceivedTime > 5000) {
+    
+                // Check for lost connection
+                if (isConnected() && currentTime - lastMessageReceivedTime > 2000) {
                     System.out.println("No valid message received in the last 5 seconds. Assuming connection lost.");
                     setConnected(false);
+    
+                    // Switch to QueuePanel
+                    QueuePanel queuePanel = (QueuePanel) Main.getPanelByType(QueuePanel.class);
+                    if (queuePanel != null) {
+                        queuePanel.setConnectionManager(ConnectionManager.getInstance());
+                        queuePanel.setStatusText("You lost connection");
+                        Main.switchPanel("QueuePanel");
+                    } else {
+                        System.err.println("QueuePanel not found!");
+                    }
+    
+                    // Attempt reconnection
                     handleDisconnection();
                 }
             }
-        }, 0, 1000);
+        }, 0, 1000); // Check every second
     }
-
+    
     private String receiveMessage() throws IOException {
         if (reader != null) {
             return reader.readLine();
@@ -133,19 +140,32 @@ public class ConnectionManager {
         System.out.println("Connection lost. Attempting to reconnect...");
 
         new Thread(() -> {
-            while (isReconnecting()) {
+            int attempts = 0;
+            while (isReconnecting() && attempts < 10) {
                 try {
-                    disconnect();
-                    Thread.sleep(5000); // Retry every 5 seconds
+                    disconnect();    
+                    Thread.sleep(2000); // Retry every 5 seconds
                     connect();
                     setConnected(true);
+                    sendPlayerAction(null, "enter");
+                    Thread.sleep(2000); // Retry every 5 seconds
                     synchronized (this) {
                         reconnecting = false;
                     }
                     System.out.println("Reconnection successful.");
+                    return; // Exit the loop on success
                 } catch (IOException | InterruptedException e) {
-                    System.out.println("Reconnection failed: " + e.getMessage());
+                    attempts++;
+                    System.out.println("Reconnection attempt " + attempts + " failed: " + e.getMessage());
                 }
+            }
+
+            if (attempts == 10) {
+                System.out.println("Failed to reconnect after 10 attempts.");
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(null, "Reconnection failed. Returning to menu.");
+                    Main.switchPanel("MenuPanel");
+                });
             }
         }).start();
     }
@@ -194,6 +214,8 @@ public class ConnectionManager {
                 return String.format("KIVUPSskipMv%04d%s", username.length(), username);
             case "forceDraw":
                 return String.format("KIVUPSforceD%04d%s", username.length(), username);
+            case "reconnect":
+                return String.format("KIVUPSreConn%04d%s", username.length(), username);
             default:
                 System.out.println("Unknown action: " + action);
                 return "";

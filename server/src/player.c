@@ -102,6 +102,8 @@ void disconnect_player(Player *player) {
 }
 
 void handle_player_message(Player *player) {
+
+    printf("MESSAGE RECEIVED\n");
     if (!player || player->sockfd == -1) return;
     char *buffer = player->buffer;
     int buffer_size = player->bufferPtr;
@@ -122,7 +124,9 @@ void handle_player_message(Player *player) {
         char opcode[8];
         strncpy(opcode, message_start + 6, 6);
         opcode[6] = '\0';
+        printf("%s\n", opcode);
         if (strcmp(opcode, "enterQ") == 0) {
+            printf("ENTER QUEUE\n");
             if (player->state == STATE_IDLE || player->state == STATE_DISCONNECTED) {
                 handle_enter_queue(player);
             } else {
